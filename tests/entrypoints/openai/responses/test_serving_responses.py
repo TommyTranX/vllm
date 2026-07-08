@@ -548,6 +548,7 @@ class TestHarmonyPreambleStreaming:
         item.channel = channel
         item.recipient = recipient
         item.content = [content_part]
+        item.author.role = "assistant"
         return item
 
     def test_preamble_delta_emits_text_events(self) -> None:
@@ -747,6 +748,63 @@ class TestHarmonyPreambleStreaming:
 
         assert added_item_id != "stale_item"
         assert done.item.id == added_item_id
+
+    def test_browser_tool_completion_emits_web_search_only(self) -> None:
+        """browser.* completions should not also stream generic MCP calls."""
+        from vllm.entrypoints.openai.responses.streaming_events import (
+            emit_previous_item_done_events,
+            emit_tool_action_events,
+        )
+
+        previous = self._make_previous_item(
+            channel="commentary",
+            recipient="browser.search",
+            text='{"query":"vllm streaming"}',
+        )
+        state = StreamingState()
+        tool_server = MagicMock(spec=ToolServer)
+        tool_server.has_tool.return_value = True
+
+        events = emit_previous_item_done_events(previous, state)
+        events.extend(emit_tool_action_events(previous, state, tool_server))
+
+        assert [e.type for e in events] == [
+            "response.output_item.added",
+            "response.web_search_call.in_progress",
+            "response.web_search_call.searching",
+            "response.web_search_call.completed",
+            "response.output_item.done",
+        ]
+        assert events[0].item.type == "web_search_call"
+        assert events[-1].item.type == "web_search_call"
+
+    def test_bare_browser_recipient_is_not_mcp_call(self) -> None:
+        """Bare browser recipients are skipped, not streamed as MCP calls."""
+        from vllm.entrypoints.openai.responses.streaming_events import (
+            emit_content_delta_events,
+            emit_previous_item_done_events,
+            emit_tool_action_events,
+        )
+
+        segment = self._make_segment(
+            channel="commentary",
+            recipient="browser",
+            delta="Ignore this",
+        )
+        previous = self._make_previous_item(
+            channel="commentary",
+            recipient="browser",
+            text="Ignore this",
+        )
+        state = StreamingState()
+        tool_server = MagicMock(spec=ToolServer)
+        tool_server.has_tool.return_value = True
+
+        events = emit_content_delta_events(segment, state)
+        events.extend(emit_previous_item_done_events(previous, state))
+        events.extend(emit_tool_action_events(previous, state, tool_server))
+
+        assert events == []
 
 
 def _make_simple_context_with_output(text, token_ids, response_parser=None):
