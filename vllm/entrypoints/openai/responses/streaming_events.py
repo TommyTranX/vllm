@@ -593,6 +593,8 @@ def emit_content_delta_events(
             return emit_function_call_delta_events(delta, function_name, state)
         elif recipient == "python":
             return emit_code_interpreter_delta_events(delta, state)
+        elif recipient.startswith("browser."):
+            return []
         elif recipient.startswith("mcp.") or is_mcp_tool_by_namespace(
             recipient, fn_names
         ):
@@ -618,6 +620,8 @@ def _emit_missing_previous_item_delta_events(
     recipient = previous_item.recipient
 
     if recipient is not None:
+        if recipient.startswith("browser."):
+            return []
         if is_function_recipient(recipient, function_tool_names):
             function_name = extract_function_from_recipient(recipient)
             return emit_function_call_delta_events(text, function_name, state)
@@ -650,6 +654,8 @@ def emit_previous_item_done_events(
     text = previous_item.content[0].text
     if previous_item.recipient is not None:
         # Deal with tool call
+        if previous_item.recipient.startswith("browser."):
+            return events
         if is_function_recipient(previous_item.recipient, function_tool_names):
             function_name = extract_function_from_recipient(previous_item.recipient)
             events.extend(emit_function_call_done_events(function_name, text, state))
@@ -1060,10 +1066,11 @@ def emit_simple_tool_call_open(
     name: str,
     index: int | None,
     namespace: str | None = None,
+    call_id: str | None = None,
 ) -> list[StreamingResponsesResponse]:
     state.current_state = _StateType.TOOL_CALL
     state.current_item_id = random_uuid()
-    state.tool_call_id = f"call_{random_uuid()}"
+    state.tool_call_id = call_id or f"call_{random_uuid()}"
     state.tool_call_name = name
     state.tool_call_namespace = namespace
     state.tool_call_index = index
@@ -1287,6 +1294,7 @@ class SimpleStreamingEventProcessor:
                 call_name.name,
                 tool_call.index,
                 call_name.namespace,
+                tool_call.id,
             )
         return handlers.open_fn(self.state)
 

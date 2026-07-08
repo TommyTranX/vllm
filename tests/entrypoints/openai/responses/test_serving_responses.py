@@ -544,7 +544,10 @@ class TestHarmonyPreambleStreaming:
         """Build a lightweight mock previous_item (openai_harmony Message)."""
         content_part = MagicMock()
         content_part.text = text
+        author = MagicMock()
+        author.role = "assistant"
         item = MagicMock()
+        item.author = author
         item.channel = channel
         item.recipient = recipient
         item.content = [content_part]
@@ -747,6 +750,35 @@ class TestHarmonyPreambleStreaming:
 
         assert added_item_id != "stale_item"
         assert done.item.id == added_item_id
+
+    def test_browser_tool_completion_emits_web_search_only(self) -> None:
+        """browser.* completions should not also stream generic MCP calls."""
+        from vllm.entrypoints.openai.responses.streaming_events import (
+            emit_previous_item_done_events,
+            emit_tool_action_events,
+        )
+
+        previous = self._make_previous_item(
+            channel="commentary",
+            recipient="browser.search",
+            text='{"query":"vllm streaming"}',
+        )
+        state = StreamingState()
+        tool_server = MagicMock(spec=ToolServer)
+        tool_server.has_tool.return_value = True
+
+        events = emit_previous_item_done_events(previous, state)
+        events.extend(emit_tool_action_events(previous, state, tool_server))
+
+        assert [e.type for e in events] == [
+            "response.output_item.added",
+            "response.web_search_call.in_progress",
+            "response.web_search_call.searching",
+            "response.web_search_call.completed",
+            "response.output_item.done",
+        ]
+        assert events[0].item.type == "web_search_call"
+        assert events[-1].item.type == "web_search_call"
 
 
 def _make_simple_context_with_output(text, token_ids, response_parser=None):
@@ -1154,6 +1186,10 @@ class TestAutoToolStreaming:
             "get_weather",
             "get_weather",
         ]
+        assert [event.item.call_id for event in function_items] == [
+            "call_vienna",
+            "call_berlin",
+        ]
         assert [event.output_index for event in function_items] == [0, 1]
 
         argument_deltas = [
@@ -1186,6 +1222,10 @@ class TestAutoToolStreaming:
         assert [event.item.arguments for event in function_done] == [
             '{"location":"Vienna"}',
             '{"location":"Berlin"}',
+        ]
+        assert [event.item.call_id for event in function_done] == [
+            "call_vienna",
+            "call_berlin",
         ]
         assert [event.output_index for event in function_done] == [0, 1]
 

@@ -16,10 +16,13 @@ from vllm.entrypoints.openai.responses.streaming_events import (
 
 
 def _make_tool_call(
-    index: int, name: str | None = None, arguments: str | None = None
+    index: int,
+    name: str | None = None,
+    arguments: str | None = None,
+    id: str | None = None,
 ) -> DeltaToolCall:
     fn = DeltaFunctionCall(name=name, arguments=arguments)
-    return DeltaToolCall(index=index, function=fn)
+    return DeltaToolCall(id=id, index=index, function=fn)
 
 
 class TestSplitDelta:
@@ -114,6 +117,24 @@ class TestProcessorCompoundDeltas:
         assert events[1].delta == ""
         assert events[2].arguments == ""
         assert events[3].item.arguments == ""
+
+    def test_tool_call_preserves_parser_call_id(self):
+        tc = _make_tool_call(
+            0,
+            id="call_from_parser",
+            name="get_weather",
+            arguments='{"city":"SF"}',
+        )
+
+        processor = SimpleStreamingEventProcessor()
+        events = _run_through_processor(processor, DeltaMessage(tool_calls=[tc]))
+        events.extend(processor.close_current())
+
+        added = next(e for e in events if e.type == "response.output_item.added")
+        done = next(e for e in events if e.type == "response.output_item.done")
+
+        assert added.item.call_id == "call_from_parser"
+        assert done.item.call_id == "call_from_parser"
 
     def test_split_name_and_args_same_index(self):
         """Regression: parsers like KimiK2 emit name and args as separate
