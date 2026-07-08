@@ -780,6 +780,34 @@ class TestHarmonyPreambleStreaming:
         assert events[0].item.type == "web_search_call"
         assert events[-1].item.type == "web_search_call"
 
+    def test_bare_browser_recipient_is_not_mcp_call(self) -> None:
+        """Bare browser recipients are skipped, not streamed as MCP calls."""
+        from vllm.entrypoints.openai.responses.streaming_events import (
+            emit_content_delta_events,
+            emit_previous_item_done_events,
+            emit_tool_action_events,
+        )
+
+        segment = self._make_segment(
+            channel="commentary",
+            recipient="browser",
+            delta="Ignore this",
+        )
+        previous = self._make_previous_item(
+            channel="commentary",
+            recipient="browser",
+            text="Ignore this",
+        )
+        state = StreamingState()
+        tool_server = MagicMock(spec=ToolServer)
+        tool_server.has_tool.return_value = True
+
+        events = emit_content_delta_events(segment, state)
+        events.extend(emit_previous_item_done_events(previous, state))
+        events.extend(emit_tool_action_events(previous, state, tool_server))
+
+        assert events == []
+
 
 def _make_simple_context_with_output(text, token_ids, response_parser=None):
     """Create a SimpleContext with a RequestOutput containing the given text."""

@@ -101,6 +101,10 @@ def _resolve_mcp_name_label(recipient: str) -> tuple[str, str]:
     return recipient, TOOL_NAME_TO_MCP_SERVER_LABEL.get(recipient, recipient)
 
 
+def _is_browser_recipient(recipient: str) -> bool:
+    return recipient == "browser" or recipient.startswith("browser.")
+
+
 @dataclass
 class StreamingState:
     """Mutable state for streaming event processing."""
@@ -593,7 +597,7 @@ def emit_content_delta_events(
             return emit_function_call_delta_events(delta, function_name, state)
         elif recipient == "python":
             return emit_code_interpreter_delta_events(delta, state)
-        elif recipient.startswith("browser."):
+        elif _is_browser_recipient(recipient):
             return []
         elif recipient.startswith("mcp.") or is_mcp_tool_by_namespace(
             recipient, fn_names
@@ -620,7 +624,7 @@ def _emit_missing_previous_item_delta_events(
     recipient = previous_item.recipient
 
     if recipient is not None:
-        if recipient.startswith("browser."):
+        if _is_browser_recipient(recipient):
             return []
         if is_function_recipient(recipient, function_tool_names):
             function_name = extract_function_from_recipient(recipient)
@@ -654,7 +658,7 @@ def emit_previous_item_done_events(
     text = previous_item.content[0].text
     if previous_item.recipient is not None:
         # Deal with tool call
-        if previous_item.recipient.startswith("browser."):
+        if _is_browser_recipient(previous_item.recipient):
             return events
         if is_function_recipient(previous_item.recipient, function_tool_names):
             function_name = extract_function_from_recipient(previous_item.recipient)
