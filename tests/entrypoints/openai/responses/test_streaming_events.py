@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import pytest
+
 from vllm.entrypoints.openai.engine.protocol import (
     DeltaFunctionCall,
     DeltaMessage,
@@ -94,6 +96,24 @@ class TestProcessorCompoundDeltas:
         ]
         assert len(added) == 2
         assert len(deltas) == 2
+
+    @pytest.mark.parametrize("arguments", [None, ""])
+    def test_zero_argument_tool_call_emits_arguments_lifecycle(self, arguments):
+        tc = _make_tool_call(0, name="ping", arguments=arguments)
+
+        processor = SimpleStreamingEventProcessor()
+        events = _run_through_processor(processor, DeltaMessage(tool_calls=[tc]))
+        events.extend(processor.close_current())
+
+        assert [e.type for e in events] == [
+            "response.output_item.added",
+            "response.function_call_arguments.delta",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+        ]
+        assert events[1].delta == ""
+        assert events[2].arguments == ""
+        assert events[3].item.arguments == ""
 
     def test_split_name_and_args_same_index(self):
         """Regression: parsers like KimiK2 emit name and args as separate
