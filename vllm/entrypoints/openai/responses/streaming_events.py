@@ -601,6 +601,39 @@ def emit_content_delta_events(
     return []
 
 
+def _emit_missing_previous_item_delta_events(
+    previous_item: HarmonyMessage,
+    state: StreamingState,
+    function_tool_names: frozenset[str] | None = None,
+) -> list[StreamingResponsesResponse]:
+    """Open a completed item that produced no incremental delta events."""
+    if state.sent_output_item_added or state.is_first_function_call_delta:
+        return []
+
+    state.current_content_index = -1
+    state.current_item_id = ""
+    state.current_call_id = ""
+
+    text = previous_item.content[0].text
+    recipient = previous_item.recipient
+
+    if recipient is not None:
+        if is_function_recipient(recipient, function_tool_names):
+            function_name = extract_function_from_recipient(recipient)
+            return emit_function_call_delta_events(text, function_name, state)
+        if recipient == "python":
+            return emit_code_interpreter_delta_events(text, state)
+        if is_mcp_tool_by_namespace(recipient, function_tool_names):
+            return emit_mcp_delta_events(text, state, recipient)
+        return []
+
+    if previous_item.channel == "analysis":
+        return emit_reasoning_delta_events(text, state)
+    if previous_item.channel in ("commentary", "final"):
+        return emit_text_delta_events(text, state)
+    return []
+
+
 def emit_previous_item_done_events(
     previous_item: HarmonyMessage,
     state: StreamingState,
@@ -611,32 +644,36 @@ def emit_previous_item_done_events(
     This is a Harmony-specific dispatcher that extracts values from the
     Harmony parser's message object and delegates to shared leaf helpers.
     """
-    if not state.sent_output_item_added and not state.is_first_function_call_delta:
-        # Suppress done events for items had no delta and thus had no
-        # added/in-progress lifecycle events. This is a bug.
-        # TODO: Ensure added/in-progress events are emitted for zero-delta items.
-        return []
-
+    events = _emit_missing_previous_item_delta_events(
+        previous_item, state, function_tool_names
+    )
     text = previous_item.content[0].text
     if previous_item.recipient is not None:
         # Deal with tool call
         if is_function_recipient(previous_item.recipient, function_tool_names):
             function_name = extract_function_from_recipient(previous_item.recipient)
-            return emit_function_call_done_events(function_name, text, state)
+            events.extend(emit_function_call_done_events(function_name, text, state))
+            return events
         elif previous_item.recipient == "python":
-            return emit_code_interpreter_completion_events(previous_item, state)
+            events.extend(emit_code_interpreter_completion_events(previous_item, state))
+            return events
         elif (
             is_mcp_tool_by_namespace(previous_item.recipient, function_tool_names)
             and state.current_item_id is not None
             and state.current_item_id.startswith("mcp_")
         ):
-            return emit_mcp_completion_events(previous_item.recipient, text, state)
+            events.extend(
+                emit_mcp_completion_events(previous_item.recipient, text, state)
+            )
+            return events
     elif previous_item.channel == "analysis":
-        return emit_reasoning_done_events(text, state)
+        events.extend(emit_reasoning_done_events(text, state))
+        return events
     elif previous_item.channel in ("commentary", "final"):
         # Preambles (commentary with no recipient) and final messages
         # are both user-visible text.
-        return emit_text_output_done_events(text, state)
+        events.extend(emit_text_output_done_events(text, state))
+        return events
     return []
 
 

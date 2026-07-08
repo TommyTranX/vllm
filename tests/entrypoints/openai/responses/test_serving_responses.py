@@ -641,43 +641,112 @@ class TestHarmonyPreambleStreaming:
         type_names = [e.type for e in events]
         assert "response.output_text.done" not in type_names
 
-    @pytest.mark.xfail(
-        reason=(
-            "TODO: Ensure added/in-progress events are emitted for zero-delta items."
-            "So we can safely emit done events for zero-delta items."
-        ),
-        strict=True,
+    @pytest.mark.parametrize(
+        ("channel", "recipient", "function_tool_names", "expected_types"),
+        [
+            (
+                "commentary",
+                None,
+                None,
+                [
+                    "response.output_item.added",
+                    "response.content_part.added",
+                    "response.output_text.delta",
+                    "response.output_text.done",
+                    "response.content_part.done",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "analysis",
+                None,
+                None,
+                [
+                    "response.output_item.added",
+                    "response.reasoning_part.added",
+                    "response.reasoning_text.delta",
+                    "response.reasoning_text.done",
+                    "response.reasoning_part.done",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "commentary",
+                "functions.get_weather",
+                None,
+                [
+                    "response.output_item.added",
+                    "response.function_call_arguments.delta",
+                    "response.function_call_arguments.done",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "commentary",
+                "python",
+                None,
+                [
+                    "response.output_item.added",
+                    "response.code_interpreter_call.in_progress",
+                    "response.code_interpreter_call_code.delta",
+                    "response.code_interpreter_call_code.done",
+                    "response.code_interpreter_call.interpreting",
+                    "response.code_interpreter_call.completed",
+                    "response.output_item.done",
+                ],
+            ),
+            (
+                "commentary",
+                "repo_browser.list",
+                frozenset(),
+                [
+                    "response.output_item.added",
+                    "response.mcp_call.in_progress",
+                    "response.mcp_call_arguments.delta",
+                    "response.mcp_call_arguments.done",
+                    "response.mcp_call.completed",
+                    "response.output_item.done",
+                ],
+            ),
+        ],
     )
-    def test_zero_delta_items_should_preserve_streaming_lifecycle(
+    def test_zero_delta_items_preserve_streaming_lifecycle(
         self,
+        channel,
+        recipient,
+        function_tool_names,
+        expected_types,
     ) -> None:
         """Zero-delta Harmony items should still produce a coherent lifecycle."""
         from vllm.entrypoints.openai.responses.streaming_events import (
             emit_previous_item_done_events,
         )
 
-        cases: list[tuple[str, str | None, str]] = [
-            ("commentary", None, "msg_stale"),
-            ("analysis", None, "msg_stale"),
-            ("commentary", "functions.get_weather", "fc_stale"),
-            ("commentary", "python", "tool_stale"),
-            ("commentary", "repo_browser.list", "mcp_stale"),
-        ]
+        previous = self._make_previous_item(
+            channel=channel,
+            recipient=recipient,
+            text="completed text",
+        )
+        state = StreamingState()
+        state.current_item_id = "stale_item"
+        state.current_call_id = "stale_call"
+        state.current_content_index = 99
 
-        for channel, recipient, current_item_id in cases:
-            previous = self._make_previous_item(channel=channel, recipient=recipient)
-            state = StreamingState()
-            state.current_item_id = current_item_id
-            state.current_call_id = "call_stale"
-            state.current_content_index = 0
+        events = emit_previous_item_done_events(
+            previous,
+            state,
+            function_tool_names=function_tool_names,
+        )
 
-            events = emit_previous_item_done_events(
-                previous, state, function_tool_names=None
-            )
+        type_names = [e.type for e in events]
+        assert type_names == expected_types
 
-            type_names = [e.type for e in events]
-            assert "response.output_item.added" in type_names
-            assert "response.output_item.done" in type_names
+        added = next(e for e in events if e.type == "response.output_item.added")
+        done = next(e for e in events if e.type == "response.output_item.done")
+        added_item_id = added.item.id
+
+        assert added_item_id != "stale_item"
+        assert done.item.id == added_item_id
 
 
 def _make_simple_context_with_output(text, token_ids, response_parser=None):
